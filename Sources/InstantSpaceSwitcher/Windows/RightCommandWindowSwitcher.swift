@@ -23,6 +23,7 @@ final class RightCommandWindowSwitcher {
     private var leftCommandDown = false
     private var lastRefresh = Date.distantPast
     private var cachedCandidates: [Candidate] = []
+    private var activePrefixAssignment: AppKeyAssignment?
     private var lastCycleCharacter: Character?
     private var lastCycleWindowIDs: [UInt32] = []
     private var lastCycleIndex = 0
@@ -134,8 +135,16 @@ final class RightCommandWindowSwitcher {
 
             if event.flags.contains(.maskAlternate) {
                 debug("RightCmd + Option + \(character)")
+                exitPrefixMode()
                 assignCurrentWindow(to: character)
                 return nil
+            }
+
+            if let prefixAssignment = activePrefixAssignment {
+                debug("RightCmd prefix \(prefixAssignment.appName) + \(character)")
+                exitPrefixMode()
+                return handlePrefixKey(character, in: prefixAssignment)
+                    ? nil : Unmanaged.passUnretained(event)
             }
 
             if character == "q" {
@@ -169,6 +178,10 @@ final class RightCommandWindowSwitcher {
             rightCommandDown = false
             leftCommandDown = false
         }
+
+        if !rightCommandDown {
+            exitPrefixMode()
+        }
     }
 
     private func firstLetter(from event: CGEvent) -> Character? {
@@ -187,21 +200,39 @@ final class RightCommandWindowSwitcher {
         let candidates = windowCandidates()
         debug("candidate count: \(candidates.count)")
 
+        let appAssignments = AppKeyAssignmentStore.shared.assignments(for: character)
+        if let appAssignment = appAssignments.first {
+            let scopedWindowCount = AppKeyAssignmentStore.shared.windowAssignments.filter {
+                $0.matchesAppAssignment(appAssignment)
+            }.count
+            debug(
+                "app assignment \(appAssignment.appName) has \(scopedWindowCount) scoped window assignment(s)"
+            )
+            if scopedWindowCount > 0 {
+                enterPrefixMode(for: appAssignment)
+                return true
+            }
+            return switchToAppAssignedWindow(
+                appAssignments, candidates: candidates, character: character)
+        }
+
+        if let autoAssignment = autoAppPrefixAssignment(
+            startingWith: character, candidates: candidates)
+        {
+            enterPrefixMode(for: autoAssignment)
+            return true
+        }
+
         let windowAssignments = AppKeyAssignmentStore.shared.windowAssignments(for: character)
         if !windowAssignments.isEmpty {
             return switchToAssignedWindow(
                 windowAssignments, candidates: candidates, character: character)
         }
 
-        let manualAssignments = AppKeyAssignmentStore.shared.assignments(for: character)
-        let manualAssignmentExists = !manualAssignments.isEmpty
-        let matches = candidatesMatching(character: character, candidates: candidates)
+        let matches = candidates.filter { candidateMatches($0, character: character) }
         guard !matches.isEmpty else {
             debug("no candidate for \(character)")
             resetCycleState()
-            if manualAssignmentExists {
-                return activateAssignedAppFallback(manualAssignments)
-            }
             return false
         }
 
@@ -411,8 +442,77 @@ final class RightCommandWindowSwitcher {
         lastCycleDate = .distantPast
     }
 
+    private func autoAppPrefixAssignment(
+        startingWith character: Character,
+        candidates: [Candidate]
+    ) -> AppKeyAssignment? {
+        var seenScopes = Set<String>()
+        for candidate in candidates
+        where firstComparableCharacter(in: candidate.ownerName) == character {
+            let scopeID =
+                candidate.bundleIdentifier ?? "name:\(normalizedAppName(candidate.ownerName))"
+            guard !seenScopes.contains(scopeID) else { continue }
+            seenScopes.insert(scopeID)
+
+            let assignment = AppKeyAssignment(
+                bundleIdentifier: candidate.bundleIdentifier ?? scopeID,
+                appName: candidate.ownerName,
+                key: String(character)
+            )
+            let scopedWindowCount = AppKeyAssignmentStore.shared.windowAssignments.filter {
+                $0.matchesAppAssignment(assignment)
+            }.count
+            debug(
+                "auto app assignment \(candidate.ownerName) has \(scopedWindowCount) scoped window assignment(s)"
+            )
+            if scopedWindowCount > 0 {
+                return assignment
+            }
+        }
+        return nil
+    }
+
+    private func enterPrefixMode(for assignment: AppKeyAssignment) {
+        activePrefixAssignment = assignment
+        resetCycleState()
+        debug("entered prefix mode for \(assignment.appName)")
+        Task { @MainActor in
+            SwitchOverlayController.shared.showPrefixModeIndicator()
+            OSDWindow.shared.show(message: "\(assignment.appName): window key")
+        }
+    }
+
+    private func exitPrefixMode() {
+        guard activePrefixAssignment != nil else { return }
+        debug("exited prefix mode")
+        activePrefixAssignment = nil
+        Task { @MainActor in
+            SwitchOverlayController.shared.hidePrefixModeIndicator()
+        }
+    }
+
+    private func handlePrefixKey(_ character: Character, in assignment: AppKeyAssignment) -> Bool {
+        let candidates = windowCandidates()
+        let windowAssignments = AppKeyAssignmentStore.shared.windowAssignments(
+            for: character,
+            in: assignment
+        )
+        guard !windowAssignments.isEmpty else {
+            debug("no scoped window assignment for \(assignment.appName) + \(character)")
+            resetCycleState()
+            return true
+        }
+
+        return switchToAssignedWindow(
+            windowAssignments, candidates: candidates, character: character,
+            beepOnUnavailable: false)
+    }
+
     private func switchToAssignedWindow(
-        _ assignments: [WindowKeyAssignment], candidates: [Candidate], character: Character
+        _ assignments: [WindowKeyAssignment],
+        candidates: [Candidate],
+        character: Character,
+        beepOnUnavailable: Bool = true
     ) -> Bool {
         let assignedWindowIDs = Set(assignments.map(\.windowID))
         let matches = candidates.filter { assignedWindowIDs.contains($0.windowID) }
@@ -421,7 +521,9 @@ final class RightCommandWindowSwitcher {
             for assignment in assignments {
                 AppKeyAssignmentStore.shared.removeWindowAssignment(windowID: assignment.windowID)
             }
-            DispatchQueue.main.async { NSSound.beep() }
+            if beepOnUnavailable {
+                DispatchQueue.main.async { NSSound.beep() }
+            }
             resetCycleState()
             return true
         }
@@ -434,24 +536,29 @@ final class RightCommandWindowSwitcher {
         return true
     }
 
-    private func candidatesMatching(character: Character, candidates: [Candidate]) -> [Candidate] {
-        let manualAssignments = AppKeyAssignmentStore.shared.assignments(for: character)
-        guard !manualAssignments.isEmpty else {
-            return candidates.filter { candidateMatches($0, character: character) }
-        }
-
-        let assignedBundleIDs = Set(manualAssignments.map(\.bundleIdentifier))
-        let manualMatches = candidates.filter { candidate in
+    private func switchToAppAssignedWindow(
+        _ assignments: [AppKeyAssignment], candidates: [Candidate], character: Character
+    ) -> Bool {
+        let assignedBundleIDs = Set(assignments.map(\.bundleIdentifier))
+        let matches = candidates.filter { candidate in
             guard let bundleIdentifier = candidate.bundleIdentifier else { return false }
             return assignedBundleIDs.contains(bundleIdentifier)
         }
 
-        if manualMatches.isEmpty {
+        guard !matches.isEmpty else {
             debug(
-                "manual assignment exists for \(character), but no assigned app has switchable window candidates"
+                "app assignment exists for \(character), but no assigned app has switchable window candidates"
             )
+            resetCycleState()
+            return activateAssignedAppFallback(assignments)
         }
-        return manualMatches
+
+        let candidate = candidateToFocus(from: matches, character: character)
+        debug(
+            "matched assigned app windowID=\(candidate.windowID) app=\(candidate.ownerName) title=\(candidate.title)"
+        )
+        performWindowSpaceSwitchWithOverlay(candidate: candidate)
+        return true
     }
 
     private func activateAssignedAppFallback(_ assignments: [AppKeyAssignment]) -> Bool {
@@ -486,9 +593,13 @@ final class RightCommandWindowSwitcher {
     }
 
     private func firstComparableCharacter(in string: String) -> Character? {
-        string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().first { char in
+        normalizedAppName(string).first { char in
             char.isLetter || char.isNumber
         }
+    }
+
+    private func normalizedAppName(_ string: String) -> String {
+        string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private func focus(candidate: Candidate, after delay: TimeInterval) {

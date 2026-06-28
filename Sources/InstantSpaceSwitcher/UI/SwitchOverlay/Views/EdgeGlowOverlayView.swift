@@ -18,8 +18,14 @@ private struct EdgeGlowUniforms {
     var waveSpeed: Float
     var primaryColor: SIMD3<Float>
     var accentColor: SIMD3<Float>
+    var holdsAfterFadeIn: Float
 
-    init(size: SIMD2<Float>, time: Float) {
+    init(
+        size: SIMD2<Float>,
+        time: Float,
+        parameterScale: Float = 1,
+        holdsAfterFadeIn: Bool = false
+    ) {
         self.size = size
         self.time = time
         self.fadeInDuration = EdgeGlowSettings.value(EdgeGlowSettings.fadeInDurationKey)
@@ -27,12 +33,13 @@ private struct EdgeGlowUniforms {
         self.fadeOutEnd = EdgeGlowSettings.value(EdgeGlowSettings.fadeOutEndKey)
         self.animateThickness = EdgeGlowSettings.animateThickness ? 1 : 0
         self.animateFade = EdgeGlowSettings.animateFade ? 1 : 0
-        self.thickness = EdgeGlowSettings.value(EdgeGlowSettings.thicknessKey)
-        self.glowWidth = EdgeGlowSettings.value(EdgeGlowSettings.glowWidthKey)
-        self.waveDensity = EdgeGlowSettings.value(EdgeGlowSettings.waveDensityKey)
-        self.waveSpeed = EdgeGlowSettings.value(EdgeGlowSettings.waveSpeedKey)
+        self.thickness = EdgeGlowSettings.value(EdgeGlowSettings.thicknessKey) * parameterScale
+        self.glowWidth = EdgeGlowSettings.value(EdgeGlowSettings.glowWidthKey) * parameterScale
+        self.waveDensity = EdgeGlowSettings.value(EdgeGlowSettings.waveDensityKey) * parameterScale
+        self.waveSpeed = EdgeGlowSettings.value(EdgeGlowSettings.waveSpeedKey) * parameterScale
         self.primaryColor = EdgeGlowColorSettings.primarySIMD()
         self.accentColor = EdgeGlowColorSettings.accentSIMD()
+        self.holdsAfterFadeIn = holdsAfterFadeIn ? 1 : 0
     }
 }
 
@@ -60,6 +67,7 @@ final class EdgeGlowOverlayView: MTKView, SwitchOverlayRenderable {
           float waveSpeed;
           float3 primaryColor;
           float3 accentColor;
+          float holdsAfterFadeIn;
         };
 
         vertex VertexOut vertex_main(uint vertexID [[vertex_id]]) {
@@ -131,7 +139,7 @@ final class EdgeGlowOverlayView: MTKView, SwitchOverlayRenderable {
           float fadeOutStart = max(uniforms.fadeOutStart, 0.0);
           float fadeOutEnd = max(uniforms.fadeOutEnd, fadeOutStart + 0.01);
           float intro = 1.0 - pow(1.0 - clamp(t / fadeInDuration, 0.0, 1.0), 3.0);
-          float outro = 1.0 - smoothstep(fadeOutStart, fadeOutEnd, t);
+          float outro = (uniforms.holdsAfterFadeIn > 0.5) ? 1.0 : 1.0 - smoothstep(fadeOutStart, fadeOutEnd, t);
           float thicknessScale = (uniforms.animateThickness > 0.5) ? intro * outro : 1.0;
           float fadeEnvelope = (uniforms.animateFade > 0.5) ? intro * outro : 1.0;
           float perimeter = perimeterPosition(pixel, uniforms.size);
@@ -147,11 +155,20 @@ final class EdgeGlowOverlayView: MTKView, SwitchOverlayRenderable {
 
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
+    private enum PlaybackMode {
+        case flash
+        case prefixIndicator
+    }
+
     private var lastDrawMediaTime: CFTimeInterval?
     private var playedTime: CFTimeInterval = 0
     private var playCompletion: (() -> Void)?
+    private var playbackMode: PlaybackMode = .flash
     private var animationDuration: CFTimeInterval {
         TimeInterval(EdgeGlowSettings.value(EdgeGlowSettings.durationKey))
+    }
+    private var parameterScale: Float {
+        playbackMode == .prefixIndicator ? 0.35 : 1
     }
 
     static func make(frame: NSRect) -> EdgeGlowOverlayView? {
@@ -196,11 +213,27 @@ final class EdgeGlowOverlayView: MTKView, SwitchOverlayRenderable {
     }
 
     func play(completion: (() -> Void)?) {
+        playbackMode = .flash
         playCompletion = completion
         lastDrawMediaTime = nil
         playedTime = 0
         isPaused = false
         draw()
+    }
+
+    func playPrefixIndicator() {
+        playbackMode = .prefixIndicator
+        playCompletion = nil
+        lastDrawMediaTime = nil
+        playedTime = 0
+        isPaused = false
+        draw()
+    }
+
+    func stopPrefixIndicator() {
+        guard playbackMode == .prefixIndicator else { return }
+        isPaused = true
+        playCompletion = nil
     }
 
     private static func makePipelineState(device: MTLDevice) -> MTLRenderPipelineState? {
@@ -233,7 +266,7 @@ extension EdgeGlowOverlayView: MTKViewDelegate {
         }
         lastDrawMediaTime = now
 
-        if playedTime >= animationDuration {
+        if playbackMode == .flash && playedTime >= animationDuration {
             isPaused = true
             if let completion = playCompletion {
                 playCompletion = nil
@@ -254,7 +287,9 @@ extension EdgeGlowOverlayView: MTKViewDelegate {
 
         var uniforms = EdgeGlowUniforms(
             size: SIMD2<Float>(Float(drawableSize.width), Float(drawableSize.height)),
-            time: Float(elapsed)
+            time: Float(elapsed),
+            parameterScale: parameterScale,
+            holdsAfterFadeIn: playbackMode == .prefixIndicator
         )
 
         encoder.setRenderPipelineState(pipelineState)

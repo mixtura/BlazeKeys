@@ -54,6 +54,23 @@ final class SwitchOverlayController {
         }
     }
 
+    func showPrefixModeIndicator() {
+        guard SwitchOverlayStyle.effective() == .edgeGlow else { return }
+
+        for screen in NSScreen.screens {
+            showPrefixModeIndicator(on: screen)
+        }
+    }
+
+    func hidePrefixModeIndicator() {
+        for (screenID, window) in Array(windowsByScreenID) {
+            guard styleByScreenID[screenID] == .edgeGlow else { continue }
+            (window.contentView as? EdgeGlowOverlayView)?.stopPrefixIndicator()
+            window.orderOut(nil)
+            removeWindow(window, for: screenID)
+        }
+    }
+
     /// Preview in settings: capture current desktop, hold, then play the reveal animation.
     func flashSnapshotPreview() {
         guard SwitchOverlayStyle.effective() != .none else { return }
@@ -253,6 +270,21 @@ final class SwitchOverlayController {
         styleByScreenID.removeAll()
         flashGenerationByScreenID.removeAll()
         snapshotTransitionInProgress = false
+    }
+
+    private func showPrefixModeIndicator(on screen: NSScreen) {
+        let screenID = id(for: screen)
+        let generation = (flashGenerationByScreenID[screenID] ?? 0) &+ 1
+        flashGenerationByScreenID[screenID] = generation
+
+        let window = window(for: screen, screenID: screenID, style: .edgeGlow)
+        window.setFrame(alignedScreenFrame(for: screen), display: true)
+        resetWindowVisibility(window)
+        window.orderFrontRegardless()
+
+        guard let overlayView = window.contentView as? EdgeGlowOverlayView else { return }
+        overlayView.frame = NSRect(origin: .zero, size: screen.frame.size)
+        overlayView.playPrefixIndicator()
     }
 
     private func flash(on screen: NSScreen, snapshot: CGImage?) {

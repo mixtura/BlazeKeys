@@ -25,6 +25,26 @@ struct WindowKeyAssignment: Equatable, Identifiable {
     var targetName: String {
         windowTitle.isEmpty ? appName : "\(appName) — \(windowTitle)"
     }
+
+    func matchesAppAssignment(_ assignment: AppKeyAssignment) -> Bool {
+        matchesApp(bundleIdentifier: assignment.bundleIdentifier, appName: assignment.appName)
+    }
+
+    func matchesApp(bundleIdentifier otherBundleIdentifier: String?, appName otherAppName: String)
+        -> Bool
+    {
+        if let bundleIdentifier, let otherBundleIdentifier,
+            bundleIdentifier == otherBundleIdentifier
+        {
+            return true
+        }
+
+        return normalizedAppName(appName) == normalizedAppName(otherAppName)
+    }
+
+    private func normalizedAppName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
 }
 
 final class AppKeyAssignmentStore: ObservableObject {
@@ -61,6 +81,19 @@ final class AppKeyAssignmentStore: ObservableObject {
         return windowAssignments.filter { $0.key.lowercased() == normalized }
     }
 
+    func windowAssignments(for key: Character, in assignment: AppKeyAssignment)
+        -> [WindowKeyAssignment]
+    {
+        let normalized = String(key).lowercased()
+        return windowAssignments.filter {
+            $0.key.lowercased() == normalized && $0.matchesAppAssignment(assignment)
+        }
+    }
+
+    func hasWindowAssignments(in assignment: AppKeyAssignment) -> Bool {
+        windowAssignments.contains { $0.matchesAppAssignment(assignment) }
+    }
+
     func isAssigned(bundleIdentifier: String) -> Bool {
         assignment(for: bundleIdentifier) != nil
     }
@@ -74,12 +107,17 @@ final class AppKeyAssignmentStore: ObservableObject {
         }
     }
 
-    func windowAssigned(to key: Character, excluding windowID: UInt32? = nil)
-        -> WindowKeyAssignment?
-    {
+    func windowAssigned(
+        to key: Character,
+        inAppWithBundleIdentifier bundleIdentifier: String?,
+        appName: String,
+        excluding windowID: UInt32? = nil
+    ) -> WindowKeyAssignment? {
         let normalized = String(key).lowercased()
         return windowAssignments.first {
-            $0.key.lowercased() == normalized && $0.windowID != windowID
+            $0.key.lowercased() == normalized
+                && $0.windowID != windowID
+                && $0.matchesApp(bundleIdentifier: bundleIdentifier, appName: appName)
         }
     }
 
@@ -88,7 +126,6 @@ final class AppKeyAssignmentStore: ObservableObject {
         assignments.removeAll {
             $0.bundleIdentifier == bundleIdentifier || $0.key.lowercased() == normalized
         }
-        windowAssignments.removeAll { $0.key.lowercased() == normalized }
         assignments.append(
             AppKeyAssignment(bundleIdentifier: bundleIdentifier, appName: appName, key: normalized)
         )
@@ -111,9 +148,11 @@ final class AppKeyAssignmentStore: ObservableObject {
         key: Character
     ) {
         let normalized = String(key).lowercased()
-        windowAssignments.removeAll { $0.windowID == windowID || $0.key.lowercased() == normalized }
-        assignments.removeAll { $0.key.lowercased() == normalized }
-        save()
+        windowAssignments.removeAll {
+            $0.windowID == windowID
+                || ($0.key.lowercased() == normalized
+                    && $0.matchesApp(bundleIdentifier: bundleIdentifier, appName: appName))
+        }
         windowAssignments.append(
             WindowKeyAssignment(
                 windowID: windowID,
