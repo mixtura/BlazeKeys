@@ -13,6 +13,8 @@ final class GeneralSettingsViewController: NSViewController {
     checkboxWithTitle: "Show on-screen display in Mission Control", target: nil, action: nil)
   private let swipeOverrideCheckbox = NSButton(
     checkboxWithTitle: "Override swipe gesture", target: nil, action: nil)
+  private let rightCommandWindowSwitchingCheckbox = NSButton(
+    checkboxWithTitle: "Enable Right Command + letter window switching", target: nil, action: nil)
   private let animationSpeedPopup = NSPopUpButton()
   private let animationSpeedLabel = NSTextField(labelWithString: "Animation Speed:")
   private let launchAtLoginCheckbox = NSButton(
@@ -51,6 +53,8 @@ final class GeneralSettingsViewController: NSViewController {
     showOSDInMissionControlCheckbox.action = #selector(showOSDInMissionControlChanged)
     swipeOverrideCheckbox.target = self
     swipeOverrideCheckbox.action = #selector(swipeOverrideChanged)
+    rightCommandWindowSwitchingCheckbox.target = self
+    rightCommandWindowSwitchingCheckbox.action = #selector(rightCommandWindowSwitchingChanged)
     animationSpeedPopup.target = self
     animationSpeedPopup.action = #selector(animationSpeedChanged)
     launchAtLoginCheckbox.target = self
@@ -64,6 +68,7 @@ final class GeneralSettingsViewController: NSViewController {
     let systemLabel = NSTextField(labelWithString: "System:")
     formView.addRow(label: systemLabel, control: launchAtLoginCheckbox)
     formView.addRow(label: nil, control: swipeOverrideCheckbox)
+    formView.addRow(label: nil, control: rightCommandWindowSwitchingCheckbox)
 
     let experimentalTitle = NSMutableAttributedString(string: "Enable Mission Control/Exposé detection\n")
     let sublabel = NSAttributedString(
@@ -74,7 +79,7 @@ final class GeneralSettingsViewController: NSViewController {
       ])
     experimentalTitle.append(sublabel)
     overlayDetectionCheckbox.attributedTitle = experimentalTitle
-    
+
     formView.addRow(label: nil, control: overlayDetectionCheckbox)
     formView.addSectionSpacing()
 
@@ -87,14 +92,14 @@ final class GeneralSettingsViewController: NSViewController {
     let osdLabel = NSTextField(labelWithString: "On-Screen Display:")
     showOSDCheckbox.title = "Show for"
     showOSDInMissionControlCheckbox.title = "Show in Mission Control"
-    
+
     let osdContainer = NSStackView()
     osdContainer.orientation = .horizontal
     osdContainer.spacing = 8
     osdContainer.addArrangedSubview(showOSDCheckbox)
     osdContainer.addArrangedSubview(osdDurationPopup)
     osdContainer.addArrangedSubview(NSTextField(labelWithString: "when switching spaces"))
-    
+
     formView.addRow(label: osdLabel, control: osdContainer)
     formView.addRow(label: nil, control: showOSDInMissionControlCheckbox)
   }
@@ -117,6 +122,7 @@ final class GeneralSettingsViewController: NSViewController {
     showOSDInMissionControlCheckbox.state = defaults.bool(forKey: "showOSDInMissionControl") ? .on : .off
 
     swipeOverrideCheckbox.state = defaults.bool(forKey: "swipeOverride") ? .on : .off
+    rightCommandWindowSwitchingCheckbox.state = defaults.bool(forKey: "rightCommandWindowSwitchingEnabled") ? .on : .off
 
     let animationSpeedValue = defaults.double(forKey: "gestureSpeed")
     if animationSpeedValue > 0 {
@@ -163,6 +169,12 @@ final class GeneralSettingsViewController: NSViewController {
     let isEnabled = sender.state == .on
     defaults.set(isEnabled, forKey: "swipeOverride")
     iss_set_swipe_override(isEnabled)
+  }
+
+  @objc private func rightCommandWindowSwitchingChanged(_ sender: NSButton) {
+    let isEnabled = sender.state == .on
+    defaults.set(isEnabled, forKey: "rightCommandWindowSwitchingEnabled")
+    RightCommandWindowSwitcher.shared.setEnabled(isEnabled)
   }
 
   @objc private func animationSpeedChanged(_ sender: NSPopUpButton) {

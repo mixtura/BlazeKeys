@@ -8,6 +8,7 @@
 #include <float.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -104,6 +105,7 @@ static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDispla
 static bool iss_perform_switch_gesture(ISSDirection direction, double velocity);
 static bool iss_switch_with_info(const ISSSpaceInfo *info, ISSDirection direction);
 static bool iss_should_block_switch(const ISSSpaceInfo *info, ISSDirection direction);
+static bool space_contains_window(CFDictionaryRef spaceDict, unsigned int windowID);
 
 // Perform a swipe-override switch: get space info, compute target, switch,
 // and notify the handler with the target index.
@@ -660,6 +662,167 @@ bool iss_switch_to_index(unsigned int targetIndex) {
     set_prediction(info.displayID, targetIndex);
     if (switchCallback) { switchCallback(targetIndex); }
     return !outOfBounds;
+}
+
+static bool cf_number_matches_window_id(CFNumberRef number, unsigned int windowID) {
+    if (!number || CFGetTypeID(number) != CFNumberGetTypeID()) {
+        return false;
+    }
+
+    long long candidate = 0;
+    if (!CFNumberGetValue(number, kCFNumberLongLongType, &candidate)) {
+        return false;
+    }
+
+    return candidate == (long long)windowID;
+}
+
+static bool cf_value_contains_window_id(CFTypeRef value, unsigned int windowID, unsigned int depth) {
+    if (!value || depth > 6) {
+        return false;
+    }
+
+    CFTypeID type = CFGetTypeID(value);
+    if (type == CFNumberGetTypeID()) {
+        return cf_number_matches_window_id((CFNumberRef)value, windowID);
+    }
+
+    if (type == CFArrayGetTypeID()) {
+        CFArrayRef array = (CFArrayRef)value;
+        CFIndex count = CFArrayGetCount(array);
+        for (CFIndex i = 0; i < count; i++) {
+            if (cf_value_contains_window_id(CFArrayGetValueAtIndex(array, i), windowID, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    if (type == CFDictionaryGetTypeID()) {
+        CFDictionaryRef dictionary = (CFDictionaryRef)value;
+        CFIndex count = CFDictionaryGetCount(dictionary);
+        if (count <= 0) {
+            return false;
+        }
+
+        const void **values = calloc((size_t)count, sizeof(void *));
+        if (!values) {
+            return false;
+        }
+
+        CFDictionaryGetKeysAndValues(dictionary, NULL, values);
+        bool found = false;
+        for (CFIndex i = 0; i < count; i++) {
+            if (cf_value_contains_window_id(values[i], windowID, depth + 1)) {
+                found = true;
+                break;
+            }
+        }
+
+        free(values);
+        return found;
+    }
+
+    return false;
+}
+
+static bool space_contains_window(CFDictionaryRef spaceDict, unsigned int windowID) {
+    if (!spaceDict || CFGetTypeID(spaceDict) != CFDictionaryGetTypeID()) {
+        return false;
+    }
+
+    const CFStringRef likelyKeys[] = {
+        CFSTR("windows"),
+        CFSTR("Windows"),
+        CFSTR("Window IDs"),
+        CFSTR("Managed Windows")
+    };
+
+    for (size_t i = 0; i < sizeof(likelyKeys) / sizeof(likelyKeys[0]); i++) {
+        const void *value = CFDictionaryGetValue(spaceDict, likelyKeys[i]);
+        if (cf_value_contains_window_id(value, windowID, 0)) {
+            return true;
+        }
+    }
+
+    // Private CGS dictionaries have changed key names between macOS releases.
+    // Fall back to recursively scanning values in the Space dictionary.
+    return cf_value_contains_window_id(spaceDict, windowID, 0);
+}
+
+bool iss_get_window_space_info(unsigned int windowID, ISSWindowSpaceInfo *info) {
+    if (!info || windowID == 0 || !cgs_symbols_available()) {
+        return false;
+    }
+
+    memset(info, 0, sizeof(*info));
+
+    CGSConnectionID connection = CGSMainConnectionID();
+    if (connection == 0) {
+        return false;
+    }
+
+    CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, NULL);
+    if (!displays) {
+        return false;
+    }
+
+    bool found = false;
+    CFIndex displayCount = CFArrayGetCount(displays);
+    for (CFIndex displayIndex = 0; displayIndex < displayCount && !found; displayIndex++) {
+        const void *displayValue = CFArrayGetValueAtIndex(displays, displayIndex);
+        if (!displayValue || CFGetTypeID(displayValue) != CFDictionaryGetTypeID()) {
+            continue;
+        }
+
+        CFDictionaryRef displayDict = (CFDictionaryRef)displayValue;
+        CFStringRef identifier = (CFStringRef)CFDictionaryGetValue(displayDict, CFSTR("Display Identifier"));
+        const void *spacesValue = CFDictionaryGetValue(displayDict, CFSTR("Spaces"));
+        if (!spacesValue || CFGetTypeID(spacesValue) != CFArrayGetTypeID()) {
+            continue;
+        }
+
+        CFArrayRef spaces = (CFArrayRef)spacesValue;
+        CFIndex spaceCount = CFArrayGetCount(spaces);
+        for (CFIndex spaceIndex = 0; spaceIndex < spaceCount; spaceIndex++) {
+            const void *spaceValue = CFArrayGetValueAtIndex(spaces, spaceIndex);
+            if (!spaceValue || CFGetTypeID(spaceValue) != CFDictionaryGetTypeID()) {
+                continue;
+            }
+
+            CFDictionaryRef spaceDict = (CFDictionaryRef)spaceValue;
+            if (!space_contains_window(spaceDict, windowID)) {
+                continue;
+            }
+
+            info->windowID = windowID;
+            info->spaceIndex = (unsigned int)spaceIndex;
+
+            CFNumberRef idNumber = (CFNumberRef)CFDictionaryGetValue(spaceDict, CFSTR("id64"));
+            if (idNumber && CFGetTypeID(idNumber) == CFNumberGetTypeID()) {
+                CFNumberGetValue(idNumber, kCFNumberLongLongType, &info->spaceID);
+            }
+
+            if (identifier && CFGetTypeID(identifier) == CFStringGetTypeID()) {
+                CFStringGetCString(identifier, info->displayID, sizeof(info->displayID), kCFStringEncodingUTF8);
+            }
+
+            found = true;
+            break;
+        }
+    }
+
+    CFRelease(displays);
+    return found;
+}
+
+bool iss_switch_to_window_space(unsigned int windowID) {
+    ISSWindowSpaceInfo info;
+    if (!iss_get_window_space_info(windowID, &info)) {
+        return false;
+    }
+
+    return iss_switch_to_index(info.spaceIndex);
 }
 
 void iss_set_swipe_override(bool enabled) {

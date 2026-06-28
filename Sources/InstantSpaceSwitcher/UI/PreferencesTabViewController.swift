@@ -1,20 +1,27 @@
 import AppKit
 
 final class PreferencesTabViewController: NSTabViewController {
-  override func viewDidLoad() {
-    super.viewDidLoad()
+    override func viewDidLoad() {
+        super.viewDidLoad()
 
-    tabStyle = .toolbar
+        tabStyle = .toolbar
 
-    let generalTab = NSTabViewItem(viewController: GeneralSettingsViewController())
-    generalTab.label = "General"
-    generalTab.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "General")
+        let generalTab = NSTabViewItem(viewController: GeneralSettingsViewController())
+        generalTab.label = "General"
+        generalTab.image = NSImage(
+            systemSymbolName: "gearshape", accessibilityDescription: "General")
 
-    let shortcutsTab = NSTabViewItem(viewController: KeyboardShortcutsViewController())
-    shortcutsTab.label = "Keyboard"
-    shortcutsTab.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "Keyboard")
+        let shortcutsTab = NSTabViewItem(viewController: KeyboardShortcutsViewController())
+        shortcutsTab.label = "Keyboard"
+        shortcutsTab.image = NSImage(
+            systemSymbolName: "keyboard", accessibilityDescription: "Keyboard")
 
-    addTabViewItem(generalTab)
-    addTabViewItem(shortcutsTab)
-  }
+        let appsTab = NSTabViewItem(viewController: AppAssignmentsViewController())
+        appsTab.label = "Apps"
+        appsTab.image = NSImage(systemSymbolName: "app.badge", accessibilityDescription: "Apps")
+
+        addTabViewItem(generalTab)
+        addTabViewItem(shortcutsTab)
+        addTabViewItem(appsTab)
+    }
 }

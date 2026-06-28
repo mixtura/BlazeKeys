@@ -28,6 +28,16 @@ typedef struct {
 } ISSSpaceInfo;
 
 /**
+ * @brief Describes the Space that contains a specific window.
+ */
+typedef struct {
+    unsigned int windowID;   /**< CGWindowID */
+    unsigned long long spaceID;
+    unsigned int spaceIndex; /**< Zero-based index of the Space on its display */
+    char displayID[128];     /**< UUID string of the display */
+} ISSWindowSpaceInfo;
+
+/**
  * @brief Performs the space switch if the requested move is within bounds.
  * @param direction The direction to switch spaces towards
  * @return true if the switch was posted, false if blocked by bounds or errors
@@ -62,6 +72,21 @@ bool iss_can_move(ISSSpaceInfo info, ISSDirection direction);
  * @return true if the request succeeded (already on target or switches posted)
  */
 bool iss_switch_to_index(unsigned int targetIndex);
+
+/**
+ * @brief Finds the display and Space index containing the provided CGWindowID.
+ * @param windowID Window ID from CGWindowListCopyWindowInfo.
+ * @param info Output pointer that receives the window Space info.
+ * @return true if the window was found in managed Spaces metadata.
+ */
+bool iss_get_window_space_info(unsigned int windowID, ISSWindowSpaceInfo *info);
+
+/**
+ * @brief Switches to the Space that contains the provided CGWindowID.
+ * @param windowID Window ID from CGWindowListCopyWindowInfo.
+ * @return true if the target Space was found and the switch request succeeded.
+ */
+bool iss_switch_to_window_space(unsigned int windowID);
 
 /**
  * @brief Enables or disables interception of trackpad horizontal swipe gestures.

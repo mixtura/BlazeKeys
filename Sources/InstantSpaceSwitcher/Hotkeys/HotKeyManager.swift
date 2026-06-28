@@ -11,6 +11,7 @@ class HotKeyManager {
 
   private var handlers: [UInt32: () -> Void] = [:]
   private var registrations: [HotkeyIdentifier: Registration] = [:]
+  private var heldHotKeyIds: Set<UInt32> = []
   private var currentId: UInt32 = 1
 
   private init() {
@@ -59,8 +60,12 @@ class HotKeyManager {
   }
 
   private func installEventHandler() {
-    var eventSpec = EventTypeSpec(
-      eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+    var eventSpecs = [
+      EventTypeSpec(
+        eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+      EventTypeSpec(
+        eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+    ]
 
     InstallEventHandler(
       GetEventDispatcherTarget(),
@@ -70,11 +75,19 @@ class HotKeyManager {
           event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
           MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
 
-        if let handler = HotKeyManager.shared.handlers[hotKeyID.id] {
-          handler()
+        let manager = HotKeyManager.shared
+        switch GetEventKind(event) {
+        case UInt32(kEventHotKeyPressed):
+          guard !manager.heldHotKeyIds.contains(hotKeyID.id) else { return noErr }
+          manager.heldHotKeyIds.insert(hotKeyID.id)
+          manager.handlers[hotKeyID.id]?()
+        case UInt32(kEventHotKeyReleased):
+          manager.heldHotKeyIds.remove(hotKeyID.id)
+        default:
+          break
         }
 
         return noErr
-      }, 1, &eventSpec, nil, nil)
+      }, 2, &eventSpecs, nil, nil)
   }
 }

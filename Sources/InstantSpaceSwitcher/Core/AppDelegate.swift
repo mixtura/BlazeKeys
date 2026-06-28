@@ -60,10 +60,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     bindHotkeys()
     observeSpaceChanges()
     observeAppActivation()
+    if UserDefaults.standard.bool(forKey: "rightCommandWindowSwitchingEnabled") {
+      RightCommandWindowSwitcher.shared.start()
+    }
     refreshSpaceInfo()
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    RightCommandWindowSwitcher.shared.stop()
     iss_destroy()
     stopObservingSpaceChanges()
     stopObservingAppActivation()
