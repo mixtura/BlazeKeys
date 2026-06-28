@@ -23,6 +23,20 @@ done
 PRODUCT_NAME="InstantSpaceSwitcher"
 BUILD_DIR="build"
 
+# SPM's C targets must use the same clang/SDK pair. A standalone Swift toolchain
+# (e.g. ~/Library/Developer/Toolchains/swift-*-RELEASE.xctoolchain) mixed with
+# Xcode's macOS SDK causes module build failures in ISS.
+export TOOLCHAINS="${TOOLCHAINS:-com.apple.dt.toolchain.Xcode}"
+
+if ! xcrun --find swift >/dev/null 2>&1; then
+  echo "error: Xcode swift not found. Install Xcode and select it with:"
+  echo "  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+  exit 1
+fi
+
+echo "Using toolchain: ${TOOLCHAINS}"
+echo "Swift: $(xcrun swift --version | head -1)"
+
 if [[ "$CLEAN" == true ]]; then
   echo "Cleaning build directory..."
   rm -rf "${BUILD_DIR}"
@@ -36,9 +50,15 @@ echo "Building arm64 and x86_64 in parallel..."
 ARM64_LOG=$(mktemp)
 X86_LOG=$(mktemp)
 
-swift build -c "${BUILD_CONFIG}" --arch arm64  --build-path "${BUILD_DIR}/arm64"  --disable-sandbox > "${ARM64_LOG}" 2>&1 &
+swift_build_cmd=(
+  xcrun swift build
+  -c "${BUILD_CONFIG}"
+  --disable-sandbox
+)
+
+"${swift_build_cmd[@]}" --arch arm64  --build-path "${BUILD_DIR}/arm64"  > "${ARM64_LOG}" 2>&1 &
 PID_ARM64=$!
-swift build -c "${BUILD_CONFIG}" --arch x86_64 --build-path "${BUILD_DIR}/x86_64" --disable-sandbox > "${X86_LOG}"  2>&1 &
+"${swift_build_cmd[@]}" --arch x86_64 --build-path "${BUILD_DIR}/x86_64" > "${X86_LOG}"  2>&1 &
 PID_X86=$!
 
 printf "  arm64: starting...\n x86_64: starting...\n"
