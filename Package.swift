@@ -20,7 +20,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "InstantSpaceSwitcher",
-            dependencies: ["ISS"]
+            dependencies: ["ISS"],
+            linkerSettings: [
+                .linkedFramework("ScreenCaptureKit")
+            ]
         ),
         .executableTarget(
             name: "ISSCli",

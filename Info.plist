@@ -22,5 +22,7 @@
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>InstantSpaceSwitcher captures the desktop to play snapshot reveal animations when switching spaces.</string>
 </dict>
 </plist>
