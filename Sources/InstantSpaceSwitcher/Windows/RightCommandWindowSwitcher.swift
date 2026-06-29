@@ -36,6 +36,10 @@ final class RightCommandWindowSwitcher {
         UserDefaults.standard.bool(forKey: "rightCommandWindowSwitchingDebug")
     }
 
+    private var ignoresKeyboardLayout: Bool {
+        UserDefaults.standard.bool(forKey: RightCommandKeyResolver.ignoreKeyboardLayoutDefaultsKey)
+    }
+
     private init() {}
 
     var isRunning: Bool {
@@ -186,15 +190,11 @@ final class RightCommandWindowSwitcher {
     }
 
     private func firstLetter(from event: CGEvent) -> Character? {
-        guard let nsEvent = NSEvent(cgEvent: event),
-            let characters = nsEvent.charactersIgnoringModifiers?.lowercased(),
-            let first = characters.first,
-            first.isLetter || first.isNumber
-        else {
-            return nil
-        }
-
-        return first
+        guard let nsEvent = NSEvent(cgEvent: event) else { return nil }
+        return RightCommandKeyResolver.character(
+            from: nsEvent,
+            ignoresKeyboardLayout: ignoresKeyboardLayout
+        )
     }
 
     private func switchToFirstWindow(startingWith character: Character) -> Bool {

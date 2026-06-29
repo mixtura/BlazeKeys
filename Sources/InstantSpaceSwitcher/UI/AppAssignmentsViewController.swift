@@ -481,8 +481,14 @@ final class AppAssignmentsViewController: NSViewController {
             return
         }
 
-        guard let key = event.charactersIgnoringModifiers?.lowercased().first,
-            key.isLetter || key.isNumber
+        let ignoresKeyboardLayout = UserDefaults.standard.bool(
+            forKey: RightCommandKeyResolver.ignoreKeyboardLayoutDefaultsKey
+        )
+        guard
+            let key = RightCommandKeyResolver.character(
+                from: event,
+                ignoresKeyboardLayout: ignoresKeyboardLayout
+            )
         else {
             NSSound.beep()
             setStatus("Use a single letter or number.")

@@ -18,6 +18,9 @@ final class GeneralSettingsViewController: NSViewController {
     private let rightCommandWindowSwitchingCheckbox = NSButton(
         checkboxWithTitle: "Enable Right Command + letter window switching", target: nil,
         action: nil)
+    private let rightCommandIgnoreKeyboardLayoutCheckbox = NSButton(
+        checkboxWithTitle: "Ignore current keyboard language for Right Command keys", target: nil,
+        action: nil)
     private let switchOverlayPreferences = SwitchOverlayPreferencesView()
     private let launchAtLoginCheckbox = NSButton(
         checkboxWithTitle: "Launch at login", target: nil, action: nil)
@@ -67,6 +70,9 @@ final class GeneralSettingsViewController: NSViewController {
         swipeOverrideCheckbox.action = #selector(swipeOverrideChanged)
         rightCommandWindowSwitchingCheckbox.target = self
         rightCommandWindowSwitchingCheckbox.action = #selector(rightCommandWindowSwitchingChanged)
+        rightCommandIgnoreKeyboardLayoutCheckbox.target = self
+        rightCommandIgnoreKeyboardLayoutCheckbox.action = #selector(
+            rightCommandIgnoreKeyboardLayoutChanged)
         launchAtLoginCheckbox.target = self
         launchAtLoginCheckbox.action = #selector(launchAtLoginChanged)
 
@@ -76,6 +82,7 @@ final class GeneralSettingsViewController: NSViewController {
         formView.addRow(label: systemLabel, control: launchAtLoginCheckbox)
         formView.addRow(label: nil, control: swipeOverrideCheckbox)
         formView.addRow(label: nil, control: rightCommandWindowSwitchingCheckbox)
+        formView.addRow(label: nil, control: rightCommandIgnoreKeyboardLayoutCheckbox)
 
         let experimentalTitle = NSMutableAttributedString(
             string: "Enable Mission Control/Exposé detection\n")
@@ -96,7 +103,8 @@ final class GeneralSettingsViewController: NSViewController {
         formView.addRow(label: nil, control: switchOverlayPreferences.settingsPanel)
         switchOverlayPreferences.onSettingsVisibilityChanged = { [weak self] visible in
             guard let self else { return }
-            self.formView.setRowHidden(for: self.switchOverlayPreferences.settingsPanel, hidden: !visible)
+            self.formView.setRowHidden(
+                for: self.switchOverlayPreferences.settingsPanel, hidden: !visible)
         }
         switchOverlayPreferences.onSettingsVisibilityChanged?(
             SwitchOverlayStyle.current == .edgeGlow
@@ -140,6 +148,9 @@ final class GeneralSettingsViewController: NSViewController {
         swipeOverrideCheckbox.state = defaults.bool(forKey: "swipeOverride") ? .on : .off
         rightCommandWindowSwitchingCheckbox.state =
             defaults.bool(forKey: "rightCommandWindowSwitchingEnabled") ? .on : .off
+        rightCommandIgnoreKeyboardLayoutCheckbox.state =
+            defaults.bool(forKey: RightCommandKeyResolver.ignoreKeyboardLayoutDefaultsKey)
+            ? .on : .off
 
         launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
@@ -181,6 +192,13 @@ final class GeneralSettingsViewController: NSViewController {
         let isEnabled = sender.state == .on
         defaults.set(isEnabled, forKey: "rightCommandWindowSwitchingEnabled")
         RightCommandWindowSwitcher.shared.setEnabled(isEnabled)
+    }
+
+    @objc private func rightCommandIgnoreKeyboardLayoutChanged(_ sender: NSButton) {
+        defaults.set(
+            sender.state == .on,
+            forKey: RightCommandKeyResolver.ignoreKeyboardLayoutDefaultsKey
+        )
     }
 
     @objc private func launchAtLoginChanged(_ sender: NSButton) {
