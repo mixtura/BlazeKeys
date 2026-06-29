@@ -74,6 +74,14 @@ bool iss_can_move(ISSSpaceInfo info, ISSDirection direction);
 bool iss_switch_to_index(unsigned int targetIndex);
 
 /**
+ * @brief Attempts to switch directly to a Space index on the provided display.
+ * @param displayID UUID string of the display containing the desired Space.
+ * @param targetIndex Zero-based index for the desired Space on that display.
+ * @return true if the request succeeded or the display Space was already active.
+ */
+bool iss_switch_to_display_space_index(const char *displayID, unsigned int targetIndex);
+
+/**
  * @brief Finds the display and Space index containing the provided CGWindowID.
  * @param windowID Window ID from CGWindowListCopyWindowInfo.
  * @param info Output pointer that receives the window Space info.

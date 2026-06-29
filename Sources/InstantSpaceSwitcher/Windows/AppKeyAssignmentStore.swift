@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import ISS
 
 struct AppKeyAssignment: Codable, Equatable, Identifiable {
     var bundleIdentifier: String
@@ -13,11 +14,43 @@ struct AppKeyAssignment: Codable, Equatable, Identifiable {
     }
 }
 
+struct StoredWindowSpaceInfo: Equatable {
+    var spaceID: UInt64
+    var spaceIndex: UInt32
+    var displayID: String
+
+    init(spaceID: UInt64, spaceIndex: UInt32, displayID: String) {
+        self.spaceID = spaceID
+        self.spaceIndex = spaceIndex
+        self.displayID = displayID
+    }
+
+    init(_ info: ISSWindowSpaceInfo) {
+        self.spaceID = info.spaceID
+        self.spaceIndex = info.spaceIndex
+        var mutableInfo = info
+        self.displayID = withUnsafePointer(to: &mutableInfo.displayID) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: 128) { displayIDPointer in
+                String(cString: displayIDPointer)
+            }
+        }
+    }
+
+    func matches(_ info: StoredWindowSpaceInfo?) -> Bool {
+        guard let info else { return false }
+        if spaceID != 0, info.spaceID != 0 {
+            return spaceID == info.spaceID
+        }
+        return spaceIndex == info.spaceIndex && displayID == info.displayID
+    }
+}
+
 struct WindowKeyAssignment: Equatable, Identifiable {
     var windowID: UInt32
     var bundleIdentifier: String?
     var appName: String
     var windowTitle: String
+    var spaceInfo: StoredWindowSpaceInfo?
     var key: String
 
     var id: UInt32 { windowID }
@@ -33,6 +66,20 @@ struct WindowKeyAssignment: Equatable, Identifiable {
     func matchesApp(bundleIdentifier otherBundleIdentifier: String?, appName otherAppName: String)
         -> Bool
     {
+        Self.matchesApp(
+            bundleIdentifier: bundleIdentifier,
+            appName: appName,
+            otherBundleIdentifier: otherBundleIdentifier,
+            otherAppName: otherAppName
+        )
+    }
+
+    static func matchesApp(
+        bundleIdentifier: String?,
+        appName: String,
+        otherBundleIdentifier: String?,
+        otherAppName: String
+    ) -> Bool {
         if let bundleIdentifier, let otherBundleIdentifier,
             bundleIdentifier == otherBundleIdentifier
         {
@@ -42,7 +89,7 @@ struct WindowKeyAssignment: Equatable, Identifiable {
         return normalizedAppName(appName) == normalizedAppName(otherAppName)
     }
 
-    private func normalizedAppName(_ name: String) -> String {
+    private static func normalizedAppName(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
@@ -145,6 +192,7 @@ final class AppKeyAssignmentStore: ObservableObject {
         bundleIdentifier: String?,
         appName: String,
         windowTitle: String,
+        spaceInfo: StoredWindowSpaceInfo?,
         key: Character
     ) {
         let normalized = String(key).lowercased()
@@ -159,6 +207,7 @@ final class AppKeyAssignmentStore: ObservableObject {
                 bundleIdentifier: bundleIdentifier,
                 appName: appName,
                 windowTitle: windowTitle,
+                spaceInfo: spaceInfo,
                 key: normalized
             )
         )

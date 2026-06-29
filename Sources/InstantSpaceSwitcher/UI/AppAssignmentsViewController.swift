@@ -35,6 +35,7 @@ final class AppAssignmentsViewController: NSViewController {
         let icon: NSImage?
         let windowID: UInt32?
         let windowTitle: String?
+        let spaceInfo: StoredWindowSpaceInfo?
         let isIndented: Bool
         let isAssignable: Bool
     }
@@ -266,6 +267,7 @@ final class AppAssignmentsViewController: NSViewController {
                     icon: first.icon,
                     windowID: nil,
                     windowTitle: nil,
+                    spaceInfo: nil,
                     isIndented: false,
                     isAssignable: first.bundleIdentifier != nil && !appIsAssigned
                 )
@@ -288,6 +290,7 @@ final class AppAssignmentsViewController: NSViewController {
                         icon: window.icon,
                         windowID: window.windowID,
                         windowTitle: window.windowTitle,
+                        spaceInfo: window.spaceInfo,
                         isIndented: true,
                         isAssignable: !windowIsAssigned
                     )
@@ -303,6 +306,7 @@ final class AppAssignmentsViewController: NSViewController {
         let bundleIdentifier: String?
         let appName: String
         let windowTitle: String
+        let spaceInfo: StoredWindowSpaceInfo?
         let icon: NSImage?
 
         var displayTitle: String {
@@ -340,15 +344,16 @@ final class AppAssignmentsViewController: NSViewController {
                 continue
             }
 
-            if let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
+            guard let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
                 let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
-                bounds.width <= 1 || bounds.height <= 1
-            {
+                bounds.width > 1, bounds.height > 1
+            else {
                 continue
             }
 
-            var spaceInfo = ISSWindowSpaceInfo()
-            guard iss_get_window_space_info(windowNumber, &spaceInfo) else { continue }
+            var rawSpaceInfo = ISSWindowSpaceInfo()
+            guard iss_get_window_space_info(windowNumber, &rawSpaceInfo) else { continue }
+            let spaceInfo = StoredWindowSpaceInfo(rawSpaceInfo)
 
             let app = NSRunningApplication(processIdentifier: pid)
             let appName =
@@ -368,6 +373,7 @@ final class AppAssignmentsViewController: NSViewController {
                     bundleIdentifier: app?.bundleIdentifier,
                     appName: appName,
                     windowTitle: title,
+                    spaceInfo: spaceInfo,
                     icon: app?.icon
                 )
             )
@@ -402,6 +408,7 @@ final class AppAssignmentsViewController: NSViewController {
                 .map { NSWorkspace.shared.icon(forFile: $0.path) },
                 windowID: nil,
                 windowTitle: nil,
+                spaceInfo: nil,
                 isIndented: false,
                 isAssignable: true
             )
@@ -417,6 +424,7 @@ final class AppAssignmentsViewController: NSViewController {
                 .map { NSWorkspace.shared.icon(forFile: $0.path) },
                 windowID: windowAssignment.windowID,
                 windowTitle: windowAssignment.windowTitle,
+                spaceInfo: windowAssignment.spaceInfo,
                 isIndented: true,
                 isAssignable: true
             )
@@ -503,6 +511,7 @@ final class AppAssignmentsViewController: NSViewController {
                 bundleIdentifier: target.bundleIdentifier,
                 appName: target.appName,
                 windowTitle: target.windowTitle ?? "",
+                spaceInfo: target.spaceInfo,
                 key: key
             )
             Task { @MainActor in

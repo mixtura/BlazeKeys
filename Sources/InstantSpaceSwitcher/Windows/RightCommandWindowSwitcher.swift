@@ -11,6 +11,7 @@ final class RightCommandWindowSwitcher {
         let ownerName: String
         let title: String
         let bundleIdentifier: String?
+        let spaceInfo: StoredWindowSpaceInfo?
 
         var displayName: String {
             title.isEmpty ? ownerName : title
@@ -260,6 +261,7 @@ final class RightCommandWindowSwitcher {
             bundleIdentifier: candidate.bundleIdentifier,
             appName: candidate.ownerName,
             windowTitle: candidate.title,
+            spaceInfo: candidate.spaceInfo,
             key: character
         )
 
@@ -368,17 +370,18 @@ final class RightCommandWindowSwitcher {
                 continue
             }
 
-            if let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
+            guard let boundsDictionary = info[kCGWindowBounds as String] as? [String: Any],
                 let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary),
-                bounds.width <= 1 || bounds.height <= 1
-            {
+                bounds.width > 1, bounds.height > 1
+            else {
                 continue
             }
 
-            var spaceInfo = ISSWindowSpaceInfo()
-            guard iss_get_window_space_info(windowNumber, &spaceInfo) else {
+            var rawSpaceInfo = ISSWindowSpaceInfo()
+            guard iss_get_window_space_info(windowNumber, &rawSpaceInfo) else {
                 continue
             }
+            let spaceInfo = StoredWindowSpaceInfo(rawSpaceInfo)
             spaceMappedWindowCount += 1
 
             let ownerName =
@@ -400,7 +403,8 @@ final class RightCommandWindowSwitcher {
                     ownerPID: ownerPID,
                     ownerName: ownerName,
                     title: title,
-                    bundleIdentifier: bundleIdentifier
+                    bundleIdentifier: bundleIdentifier,
+                    spaceInfo: spaceInfo
                 )
             )
         }
@@ -497,15 +501,70 @@ final class RightCommandWindowSwitcher {
             for: character,
             in: assignment
         )
-        guard !windowAssignments.isEmpty else {
-            debug("no scoped window assignment for \(assignment.appName) + \(character)")
+        if !windowAssignments.isEmpty {
+            return switchToAssignedWindow(
+                windowAssignments, candidates: candidates, character: character,
+                beepOnUnavailable: false)
+        }
+
+        if character == assignment.normalizedKey {
+            return switchToUnassignedWindow(
+                in: assignment, candidates: candidates, character: character)
+        }
+
+        debug("no scoped window assignment for \(assignment.appName) + \(character)")
+        resetCycleState()
+        return true
+    }
+
+    private func switchToUnassignedWindow(
+        in assignment: AppKeyAssignment,
+        candidates: [Candidate],
+        character: Character
+    ) -> Bool {
+        let assignedWindows = AppKeyAssignmentStore.shared.windowAssignments.filter {
+            $0.matchesAppAssignment(assignment)
+        }
+        let matches = candidates.filter { candidate in
+            WindowKeyAssignment.matchesApp(
+                bundleIdentifier: candidate.bundleIdentifier,
+                appName: candidate.ownerName,
+                otherBundleIdentifier: assignment.bundleIdentifier,
+                otherAppName: assignment.appName
+            ) && !windowIsAssigned(candidate, assignments: assignedWindows)
+        }
+
+        guard !matches.isEmpty else {
+            debug("no unassigned windows for \(assignment.appName) default key \(character)")
             resetCycleState()
             return true
         }
 
-        return switchToAssignedWindow(
-            windowAssignments, candidates: candidates, character: character,
-            beepOnUnavailable: false)
+        let candidate = candidateToFocus(from: matches, character: character)
+        debug(
+            "matched unassigned app windowID=\(candidate.windowID) app=\(candidate.ownerName) title=\(candidate.title) cycleIndex=\(lastCycleIndex + 1)/\(matches.count)"
+        )
+        performWindowSpaceSwitchWithOverlay(candidate: candidate)
+        return true
+    }
+
+    private func windowIsAssigned(_ candidate: Candidate, assignments: [WindowKeyAssignment])
+        -> Bool
+    {
+        assignments.contains { assignment in
+            if assignment.windowID == candidate.windowID {
+                return true
+            }
+            guard
+                assignment.matchesApp(
+                    bundleIdentifier: candidate.bundleIdentifier,
+                    appName: candidate.ownerName
+                )
+            else {
+                return false
+            }
+            return !assignment.windowTitle.isEmpty && assignment.windowTitle == candidate.title
+        }
     }
 
     private func switchToAssignedWindow(
@@ -515,11 +574,16 @@ final class RightCommandWindowSwitcher {
         beepOnUnavailable: Bool = true
     ) -> Bool {
         let assignedWindowIDs = Set(assignments.map(\.windowID))
-        let matches = candidates.filter { assignedWindowIDs.contains($0.windowID) }
+        let exactMatches = candidates.filter { assignedWindowIDs.contains($0.windowID) }
+        let matches =
+            exactMatches.isEmpty
+            ? candidatesMatchingStoredSpace(assignments: assignments, candidates: candidates)
+            : exactMatches
         guard !matches.isEmpty else {
             debug("window assignment exists for \(character), but assigned window is unavailable")
-            for assignment in assignments {
-                AppKeyAssignmentStore.shared.removeWindowAssignment(windowID: assignment.windowID)
+            if switchToStoredSpaceFallback(assignments: assignments) {
+                resetCycleState()
+                return true
             }
             if beepOnUnavailable {
                 DispatchQueue.main.async { NSSound.beep() }
@@ -530,9 +594,56 @@ final class RightCommandWindowSwitcher {
 
         let candidate = candidateToFocus(from: matches, character: character)
         debug(
-            "matched assigned windowID=\(candidate.windowID) app=\(candidate.ownerName) title=\(candidate.title)"
+            "matched assigned windowID=\(candidate.windowID) app=\(candidate.ownerName) title=\(candidate.title) exact=\(!exactMatches.isEmpty)"
         )
         performWindowSpaceSwitchWithOverlay(candidate: candidate)
+        return true
+    }
+
+    private func candidatesMatchingStoredSpace(
+        assignments: [WindowKeyAssignment],
+        candidates: [Candidate]
+    ) -> [Candidate] {
+        candidates.filter { candidate in
+            assignments.contains { assignment in
+                assignment.matchesApp(
+                    bundleIdentifier: candidate.bundleIdentifier,
+                    appName: candidate.ownerName
+                ) && assignment.spaceInfo?.matches(candidate.spaceInfo) == true
+            }
+        }
+    }
+
+    private func switchToStoredSpaceFallback(assignments: [WindowKeyAssignment]) -> Bool {
+        guard let assignment = assignments.first(where: { $0.spaceInfo != nil }),
+            let spaceInfo = assignment.spaceInfo
+        else {
+            return false
+        }
+
+        debug(
+            "falling back to stored Space app=\(assignment.appName) display=\(spaceInfo.displayID) index=\(spaceInfo.spaceIndex) id=\(spaceInfo.spaceID)"
+        )
+        let switched = spaceInfo.displayID.withCString { displayID in
+            iss_switch_to_display_space_index(displayID, spaceInfo.spaceIndex)
+        }
+        guard switched else { return false }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            if let bundleIdentifier = assignment.bundleIdentifier,
+                let app = NSRunningApplication.runningApplications(
+                    withBundleIdentifier: bundleIdentifier
+                ).first
+            {
+                app.activate(options: [.activateIgnoringOtherApps])
+            } else {
+                NSWorkspace.shared.runningApplications.first {
+                    $0.localizedName == assignment.appName
+                }?.activate(options: [.activateIgnoringOtherApps])
+            }
+            OSDWindow.shared.show(message: assignment.targetName)
+        }
+        showSwitchOverlay()
         return true
     }
 

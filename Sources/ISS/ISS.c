@@ -296,7 +296,7 @@ static bool extract_space_info_from_display(CFDictionaryRef displayDict,
     return true;
 }
 
-static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDisplay) {
+static bool load_space_info_for_display_identifier(ISSSpaceInfo *info, CFStringRef activeDisplayIdentifier) {
     if (!cgs_symbols_available()) {
         fprintf(stderr, "ISS: required CGS symbols missing\n");
         return false;
@@ -320,40 +320,11 @@ static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDispla
         }
     }
 
-    // Get display identifier based on mode
-    CFStringRef activeDisplayIdentifier = NULL;
-    
-    if (useCursorDisplay) {
-        // Get display where cursor is located
-        CGEventRef tempEvent = CGEventCreate(NULL);
-        CGPoint cursorLocation = CGEventGetLocation(tempEvent);
-        CFRelease(tempEvent);
-        
-        CGDirectDisplayID cursorDisplay = 0;
-        uint32_t cursorDisplayCount = 0;
-        
-        if (CGGetDisplaysWithPoint(cursorLocation, 1, &cursorDisplay, &cursorDisplayCount) == kCGErrorSuccess && cursorDisplayCount > 0) {
-            CFUUIDRef displayUUID = CGDisplayCreateUUIDFromDisplayID(cursorDisplay);
-            if (displayUUID) {
-                activeDisplayIdentifier = CFUUIDCreateString(NULL, displayUUID);
-                CFRelease(displayUUID);
-            }
-        }
-    } else {
-        // Get menubar display
-        if (&CGSCopyActiveMenuBarDisplayIdentifier != NULL) {
-            activeDisplayIdentifier = CGSCopyActiveMenuBarDisplayIdentifier(connection);
-        }
-    }
-
     CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, activeDisplayIdentifier);
     if (!displays && activeDisplayIdentifier) {
         displays = CGSCopyManagedDisplaySpaces(connection, NULL);
     }
     if (!displays) {
-        if (activeDisplayIdentifier) {
-            CFRelease(activeDisplayIdentifier);
-        }
         return false;
     }
 
@@ -392,11 +363,38 @@ static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDispla
         success = extract_space_info_from_display(targetDisplay, activeSpace, hasActiveSpace, info);
     }
 
+    CFRelease(displays);
+
+    return success;
+}
+
+static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDisplay) {
+    CFStringRef activeDisplayIdentifier = NULL;
+    CGSConnectionID connection = CGSMainConnectionID();
+
+    if (useCursorDisplay) {
+        CGEventRef tempEvent = CGEventCreate(NULL);
+        CGPoint cursorLocation = CGEventGetLocation(tempEvent);
+        CFRelease(tempEvent);
+
+        CGDirectDisplayID cursorDisplay = 0;
+        uint32_t cursorDisplayCount = 0;
+
+        if (CGGetDisplaysWithPoint(cursorLocation, 1, &cursorDisplay, &cursorDisplayCount) == kCGErrorSuccess && cursorDisplayCount > 0) {
+            CFUUIDRef displayUUID = CGDisplayCreateUUIDFromDisplayID(cursorDisplay);
+            if (displayUUID) {
+                activeDisplayIdentifier = CFUUIDCreateString(NULL, displayUUID);
+                CFRelease(displayUUID);
+            }
+        }
+    } else if (&CGSCopyActiveMenuBarDisplayIdentifier != NULL) {
+        activeDisplayIdentifier = CGSCopyActiveMenuBarDisplayIdentifier(connection);
+    }
+
+    bool success = load_space_info_for_display_identifier(info, activeDisplayIdentifier);
     if (activeDisplayIdentifier) {
         CFRelease(activeDisplayIdentifier);
     }
-    CFRelease(displays);
-
     return success;
 }
 
@@ -627,21 +625,18 @@ bool iss_switch(ISSDirection direction) {
     return iss_perform_switch_gesture(direction, gestureSpeed);
 }
 
-bool iss_switch_to_index(unsigned int targetIndex) {
-    ISSSpaceInfo info;
-    if (!iss_get_space_info(&info)) {
+static bool iss_switch_with_space_info_to_index(ISSSpaceInfo *info, unsigned int targetIndex) {
+    if (!info || info->spaceCount == 0) {
         return false;
     }
 
-    assert(info.spaceCount > 0);
-
-    bool outOfBounds = targetIndex >= info.spaceCount;
+    bool outOfBounds = targetIndex >= info->spaceCount;
     if (outOfBounds) {
-        targetIndex = info.spaceCount - 1;
+        targetIndex = info->spaceCount - 1;
     }
 
     unsigned int predicted;
-    unsigned int currentIndex = get_prediction(info.displayID, &predicted) ? predicted : info.currentIndex;
+    unsigned int currentIndex = get_prediction(info->displayID, &predicted) ? predicted : info->currentIndex;
 
     if (currentIndex == targetIndex) {
         return !outOfBounds;
@@ -649,8 +644,6 @@ bool iss_switch_to_index(unsigned int targetIndex) {
 
     ISSDirection direction = currentIndex < targetIndex ? ISSDirectionRight : ISSDirectionLeft;
     unsigned int steps = direction == ISSDirectionRight ? (targetIndex - currentIndex) : (currentIndex - targetIndex);
-
-    // Multiply velocity by number of steps for faster multi-space switching
     double velocity = gestureSpeed * steps;
 
     for (unsigned int i = 0; i < steps; i++) {
@@ -659,9 +652,39 @@ bool iss_switch_to_index(unsigned int targetIndex) {
         }
     }
 
-    set_prediction(info.displayID, targetIndex);
+    set_prediction(info->displayID, targetIndex);
     if (switchCallback) { switchCallback(targetIndex); }
     return !outOfBounds;
+}
+
+bool iss_switch_to_index(unsigned int targetIndex) {
+    ISSSpaceInfo info;
+    if (!iss_get_space_info(&info)) {
+        return false;
+    }
+
+    return iss_switch_with_space_info_to_index(&info, targetIndex);
+}
+
+bool iss_switch_to_display_space_index(const char *displayID, unsigned int targetIndex) {
+    if (!displayID || displayID[0] == '\0') {
+        return iss_switch_to_index(targetIndex);
+    }
+
+    CFStringRef displayIdentifier = CFStringCreateWithCString(NULL, displayID, kCFStringEncodingUTF8);
+    if (!displayIdentifier) {
+        return false;
+    }
+
+    ISSSpaceInfo info;
+    memset(&info, 0, sizeof(info));
+    bool loaded = load_space_info_for_display_identifier(&info, displayIdentifier);
+    CFRelease(displayIdentifier);
+    if (!loaded) {
+        return false;
+    }
+
+    return iss_switch_with_space_info_to_index(&info, targetIndex);
 }
 
 static bool cf_number_matches_window_id(CFNumberRef number, unsigned int windowID) {
